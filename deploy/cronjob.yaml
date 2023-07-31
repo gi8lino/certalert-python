@@ -1,0 +1,32 @@
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: cert-check
+spec:
+  schedule: "* 09 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: certinator
+              image: ghcr.io/gi8lino/certinator:latest
+              args:
+                - --config=/config/certinator-config.yaml
+              envFrom:
+                - secretRef:
+                    name: certinator-certificate-credentials
+              volumeMounts:
+                - name: certs
+                  mountPath: /certs
+                - name: config
+                  mountPath: /config
+          volumes:
+            - name: certs
+              persistentVolumeClaim:
+                claimName: certinator-certs
+            - name: config
+              configMap:
+                name: certinator-config
+          restartPolicy: OnFailure
