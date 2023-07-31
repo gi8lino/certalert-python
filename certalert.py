@@ -81,9 +81,9 @@ def parse_args() -> argparse.Namespace:
                         "-d",
                         action="store_true",
                         help="Do not push to Prometheus Pushgateway")
-
-    # TODO: check if --fail-fast is a good idea
-
+    parser.add_argument("--ignore-errors",
+                        action="store_true",
+                        help="Exit immediately if any error occurs")
     parser.add_argument("--version",
                         action="version",
                         version=f"certalert {__version__}")
@@ -192,7 +192,7 @@ def check_config(config: dict) -> None:
             if (password := cert.get('password')):
                 cert['password'] = resolve_variable(password)
         except Exception as e:
-            raise BaseException(f"Invalid certificate '{cert_name}' ({cert_path}): {str(e)}")
+            raise Exception(f"Invalid certificate '{cert_name}' ({cert_path}). {str(e)}")
 
 
 def guess_certificate_type(cert_path: str) -> str:
@@ -451,7 +451,8 @@ def process_certs(certs: List[CertificateInfo],
                   pushgateway_url: str,
                   handler: Callable,
                   job_name: str,
-                  dry_run: bool = False) -> None:
+                  dry_run: bool = False,
+                  ignore_errors: bool = False) -> None:
     """Process the certificates and send expiration metrics to the Pushgateway."""
 
     for cert in certs:
@@ -467,7 +468,12 @@ def process_certs(certs: List[CertificateInfo],
 
             expiration_date_epoch = extract_certificate_expiration(cert=CertificateInfo(**cert))
         except Exception as e:
-            raise ssl.CertificateError(f"Cannot extract expiration date for certificate '{cert_name}' {cert_path}: {str(e)}")
+            msg = f"Cannot extract expiration date for certificate '{cert_name}' ({cert_path}). {str(e)}"
+
+            if ignore_errors:
+                logging.warning(msg)
+                continue
+            raise LookupError(msg)
 
         # Format expiration date in human-readable format
         expiration_date = datetime.datetime.fromtimestamp(expiration_date_epoch) .strftime('%Y-%m-%d %H:%M:%S')
@@ -516,6 +522,10 @@ def main():
     if config['pushgateway']['dry_run']:
         logging.info("Dry run enabled. No metrics will be sent to the Pushgateway.")
 
+    if (ignore_errors := args.ignore_errors):
+        logging.warning("'--ignore-errors' is enabled, any certificate expiration evaluation "
+                        "failures will be logged, but no exceptions will be raised.")
+
     # Send certificate expiration metrics to the Pushgateway
     try:
         handler = get_pushgateway_handler(config)
@@ -525,9 +535,11 @@ def main():
                       pushgateway_url=pushgateway.get('address'),
                       handler=handler,
                       job_name=pushgateway.get('job'),
-                      dry_run=pushgateway.get('dry_run'))
+                      dry_run=pushgateway.get('dry_run'),
+                      ignore_errors=ignore_errors)
+
     except Exception as e:
-        logging.error(f"Cannot send metrics to pushgateway. {str(e)}")
+        logging.error(f"Cannot process certificates. {str(e)}")
 
 
 if __name__ == '__main__':
