@@ -32,12 +32,14 @@ class CertificateInfo:
         path (str): The file path to the certificate.
         enabled (Optional[bool], optional): Indicates whether the certificate is enabled or disabled.
                                             Defaults to True if not specified.
-        type Optional[str]: The type of the certificate, e.g., 'pem', 'pkcs12', etc.
+        type Optional[str]: The type of the certificate. Possible values are: 'pem', 'pkcs12' or 'jks'.
                             If not specified, the type is guessed based on the file extension.
         password (Optional[str], optional): The password to access the certificate
                                             if it is password-protected. Defaults to None.
-        alias (Optional[str], optional): The alias of the certificate in the keystore
-                                         (only applicable for certain certificate types). Defaults to None.
+        alias (Optional[str], optional): Represents either the certificate's alias in the keystore
+                                         or the name of the desired certificate within a psk12 file
+                                         containing multiple certificates.
+                                         Defaults to None.
     """
     name: str
     path: str
@@ -187,7 +189,7 @@ def check_config(config: dict) -> None:
                 raise AttributeError("Key 'path' is not specified.")
 
             if not os.path.isfile(cert_path):
-                raise FileNotFoundError("Certificate not found.")
+                raise FileNotFoundError(f"Certificate '{cert_name}' ({cert_path}) not found.")
 
             if (password := cert.get('password')):
                 cert['password'] = resolve_variable(password)
