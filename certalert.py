@@ -218,9 +218,10 @@ def extract_expiration_pem(cert: CertificateInfo) -> int:
         # Load the PEM data into a private key object to test the provided password
         serialization.load_pem_private_key(
             data=pem_data,
-            password=cert.password,
+            password=cert.password.encode(),
             backend=default_backend()
         )
+        logging.debug(f"Password for certificate '{cert.name}' ({cert.path}) is valid.")
 
     # Load the PEM data into an X.509 certificate object
     cert = x509.load_pem_x509_certificate(data=pem_data,
@@ -460,11 +461,11 @@ def process_certs(certs: List[CertificateInfo],
             cert_name = cert.get('name')
             cert_path = cert.get('path')
 
-            logging.info(f"Processing certificate '{cert_name}' ({cert_path})")
-
             if cert.get('enabled', True) is False:
-                logging.debug(f"Certificate '{cert_name}' is disabled ({cert_path})")
+                logging.info(f"Skip certificate '{cert_name}' because is disabled ({cert_path})")
                 continue
+
+            logging.info(f"Processing certificate '{cert_name}' ({cert_path})")
 
             expiration_date_epoch = extract_certificate_expiration(cert=CertificateInfo(**cert))
         except Exception as e:
@@ -477,7 +478,7 @@ def process_certs(certs: List[CertificateInfo],
 
         # Format expiration date in human-readable format
         expiration_date = datetime.datetime.fromtimestamp(expiration_date_epoch) .strftime('%Y-%m-%d %H:%M:%S')
-        logging.debug(f"Certificate '{cert_path}' ({cert_path}) expires on "
+        logging.debug(f"Certificate '{cert_name}' ({cert_path}) expires on "
                       f"epoch {expiration_date_epoch} ({expiration_date})")
 
         try:
@@ -498,10 +499,10 @@ def main():
     try:
         args = parse_args()
     except Exception as e:
-        logging.error(f"Cannot parse start arguments. {str(e)}")
+        sys.stderr.write(f"ERROR: Cannot parse start arguments. {str(e)}\n")
         sys.exit(1)
 
-    level = os.environ.get('LOG_LEVEL') or logging.DEBUG if args.verbose else logging.INFO
+    level = logging.DEBUG if args.verbose else os.environ.get('LOG_LEVEL', logging.INFO)
     setup_logger(level)
 
     # Read and parse the configuration file
@@ -518,6 +519,7 @@ def main():
         logging.error(f"Invalid config file '{args.config}'. {str(e)}")
         sys.exit(1)
 
+    # Additional config parsing
     config['pushgateway']['dry_run'] = args.dry_run
     if config['pushgateway']['dry_run']:
         logging.info("Dry run enabled. No metrics will be sent to the Pushgateway.")
