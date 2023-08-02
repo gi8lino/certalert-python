@@ -68,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description="certalert - Monitor SSL/TLS certificates and push alerts to Prometheus Pushgateway",
         epilog="""
 certalert can extract the expiration date from the following certificate types:
