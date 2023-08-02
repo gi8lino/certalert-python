@@ -9,6 +9,17 @@ spec:
     spec:
       template:
         spec:
+          #initContainers:
+          #  - name: extract-cert
+          #    image: openjdk:openjdk/22-ea-jdk-slim-bullseye
+          #    command: ["/bin/sh", "-c"]
+          #    envFrom:
+          #      - secretRef:
+          #          name: certinator-certificate-credentials
+          #    args: ["keytool -exportcert -keystore /certs/keystore -alias cert_alias -storepass $CERT_PASS -file /certs/my-cert.cer"]
+          #    volumeMounts:
+          #      - name: transfer
+          #        mountPath: /certs
           containers:
             - name: certinator
               image: ghcr.io/gi8lino/certinator:latest
@@ -22,6 +33,8 @@ spec:
                   mountPath: /certs
                 - name: config
                   mountPath: /config
+                - name: transfer
+                  mountPath: /transfer
           volumes:
             - name: certs
               persistentVolumeClaim:
@@ -29,4 +42,6 @@ spec:
             - name: config
               configMap:
                 name: certinator-config
+            - name: transfer
+              emptyDir: {}
           restartPolicy: OnFailure
