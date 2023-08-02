@@ -1,10 +1,10 @@
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: certinator
+  name: certalert
 spec:
   groups:
-    - name: certinator
+    - name: certalert
       rules:
         - alert: CertificateExpiringSoon
           annotations:

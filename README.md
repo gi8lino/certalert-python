@@ -1,10 +1,10 @@
-# Certinator - Certificate Expiration Exporter
+# certalert - Certificate Expiration Exporter
 
-Certinator is a Python script designed to extract certificate expiration dates and send them as metrics to the Prometheus Pushgateway. It is especially useful for monitoring certificate expirations in a Prometheus-based monitoring environment.
+certalert is a Python script designed to extract certificate expiration dates and send them as metrics to the Prometheus Pushgateway. It is especially useful for monitoring certificate expirations in a Prometheus-based monitoring environment.
 
 ## Certificate Types
 
-Certinator supports the following types of certificates:
+certalert supports the following types of certificates:
 
 - CRT: Standard certificate format with the `.crt` file extension.
 - PEM: Standard certificate format with the `.pem` file extension.

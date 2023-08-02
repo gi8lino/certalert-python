@@ -32,11 +32,11 @@ jobs:
           platforms: linux/amd64
           push: true
           labels: |
-            org.opencontainers.image.title=certinator
-            org.opencontainers.image.description=certinator
-            org.opencontainers.image.url=https://github.com/gi8lino/certinator
-            org.opencontainers.image.source=https://github.com/gi8lino/certinator
+            org.opencontainers.image.title=certalert
+            org.opencontainers.image.description=certalert
+            org.opencontainers.image.url=https://github.com/gi8lino/certalert
+            org.opencontainers.image.source=https://github.com/gi8lino/certalert
             org.opencontainers.image.version=${{ steps.tag.outputs.version }}
           tags: |
-            ghcr.io/gi8lino/certinator:latest
-            ghcr.io/gi8lino/certinator:${{ steps.tag.outputs.version }}
+            ghcr.io/gi8lino/certalert:latest
+            ghcr.io/gi8lino/certalert:${{ steps.tag.outputs.version }}
