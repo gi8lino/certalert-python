@@ -4,8 +4,9 @@ Certinator is a Python script designed to extract certificate expiration dates a
 
 ## Certificate Types
 
-Certinator supports three types of certificates:
+Certinator supports the following types of certificates:
 
+- CRT: Standard certificate format with the `.crt` file extension.
 - PEM: Standard certificate format with the `.pem` file extension.
 - PKCS12 (P12): Certificate format with the `.p12` file extension.
 - Java Keystore (JKS): Certificate format with the `.jks` file extension.
@@ -13,3 +14,5 @@ Certinator supports three types of certificates:
 ## Examples
 
 You can find example Kubernetes manifests in the ./deploy directory
+
+If you have a special constellation the script does not cover, create a Issue or PR or use an initContainer to extract the certificate.
