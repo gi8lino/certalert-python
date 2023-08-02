@@ -1,15 +1,23 @@
+# Builder stage
+FROM python:3.11.4-alpine3.18 AS builder
+
+WORKDIR /app/certalert/
+
+COPY requirements.txt certalert.py /app/certalert/
+
+RUN apk add --no-cache --virtual .build-deps gcc musl-dev \
+    && python -m venv /app/certalert/venv \
+    && /app/certalert/venv/bin/pip install -U pip setuptools wheel \
+    && /app/certalert/venv/bin/pip install -r /app/requirements.txt \
+    && apk del .build-deps gcc musl-dev
+
+# Final stage
 FROM python:3.11.4-alpine3.18
 
-ADD requirements.txt certinator.py /app/
+WORKDIR /app/certalert/
 
-RUN apk add --no-cache --virtual .build-deps gcc musl-dev && \
-    pip install -U pip setuptools wheel && \
-    pip install -r /app/requirements.txt && \
-    apk del .build-deps gcc musl-dev
+COPY --from=builder /app/certalert/venv /app/certalert/venv
 
-FROM python:3.11.4-alpine3.18
+COPY certalert.py /app/
 
-COPY --from=builder /app /app
-
-ENTRYPOINT ["python", "/app/certinator.py"]
-
+ENTRYPOINT ["/app/certalert/venv/bin/python", "/app/certalert/certalert.py"]
