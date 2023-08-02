@@ -36,11 +36,6 @@ class CertificateInfo:
                             If not specified, the type is guessed based on the file extension.
         password (Optional[str], optional): The password to access the certificate
                                             if it is password-protected. Defaults to None.
-        position (Optional[int], optional): The position of the certificate in a PEM or PKCS12 file.
-                                            If not set and the file contains multiple certificates,
-                                            the first certificate in the chain is used.
-        alias (Optional[str], optional): The alias of the certificate in the JKS file.
-                                         Defaults to None.
         labels (Optional[Dict[str, str]], optional): Additional labels to be added to the metric.
     """
     name: str
@@ -48,9 +43,21 @@ class CertificateInfo:
     enabled: Optional[bool] = True
     type: Optional[str] = None
     password: Optional[str] = None
-    position: Optional[int] = None
-    alias: Optional[str] = None
     labels: Optional[Dict[str, str]] = None
+
+
+@dataclass
+class CertificateExpiration:
+    """Represents the expiration date of a certificate.
+
+    Attributes:
+        subject (str): The subject of the certificate.
+        epoch (int): The expiration date of the certificate in Linux epoch.
+        certificate_type (str): The type of the certificate. Possible values are: 'crt', 'pem', 'pkcs12' or 'jks'.
+    """
+    subject: str
+    epoch: int
+    certificate_type: str
 
 
 def setup_logger(level: int = logging.INFO):
@@ -201,17 +208,8 @@ def check_config(config: dict) -> None:
             if (password := cert.password):
                 cert.password = resolve_variable(password)
 
-            if cert.position is not None:
-                if cert.position < 1:
-                    raise ValueError("Key 'position' must be greater one.")
-
-                try:
-                    cert.position = int(cert.position - 1)
-                except Exception:
-                    raise TypeError("Key 'position' must be an integer.")
-
-            if cert.alias:
-                cert.alias = str(cert.alias)  # convert to string in case it is an integer
+            if cert.labels is None:
+                cert.labels = {}
 
             certs[idx] = cert  # replace the dict with the CertificateInfo object
 
@@ -236,14 +234,13 @@ def guess_certificate_type(cert_path: str) -> str:
         raise TypeError(f"Unknown certificate type for file '{cert_path}'")
 
 
-def extract_expiration_pem(cert: CertificateInfo) -> int:
-    """Extract the expiration date of a PEM certificate from a file and return it as a Linux epoch."""
+def extract_expiration_pem(cert: CertificateInfo) -> List[CertificateExpiration]:
+    """Extracts the expiration date of PEM certificates from a file and returns a list of CertificateExpiration objects."""
 
     with open(cert.path, 'rb') as pem_file:
         pem_data = pem_file.read()
 
     if cert.password:
-        # Load the PEM data into a private key object to test the provided password
         serialization.load_pem_private_key(
             data=pem_data,
             password=cert.password.encode(),
@@ -251,20 +248,22 @@ def extract_expiration_pem(cert: CertificateInfo) -> int:
         )
         logging.debug(f"Password for certificate '{cert.name}' ({cert.path}) is valid.")
 
-    # Load the PEM data into an X.509 certificate object
-    certs = x509.load_pem_x509_certificates(data=pem_data)
+    x509_certificates = x509.load_pem_x509_certificates(data=pem_data)
 
-    if cert.position and len(certs) < cert.position:
-        raise ValueError(f"Certificate position '{cert.position}' is out of range.")
+    certs = []
+    for x509_certificate in x509_certificates:
+        certs.append(
+            CertificateExpiration(
+                subject=x509_certificate.subject.rfc4514_string(),
+                epoch=int(x509_certificate.not_valid_after.timestamp()),
+                certificate_type='pem',
+            )
+        )
+    return certs
 
-    cert = certs[cert.position or 0]  # if position is not set, use the first certificate in the chain
 
-    epoch_time = int(cert.not_valid_after.timestamp())
-    return epoch_time
-
-
-def extract_expiration_p12(cert: CertificateInfo) -> int:
-    """Extract the expiration date of a certificate from a P12 file and return it as a Linux epoch."""
+def extract_expiration_p12(cert: CertificateInfo) -> List[CertificateExpiration]:
+    """Extracts the expiration date of a PKCS12 certificate from a file and returns a list of CertificateExpiration objects."""
 
     with open(cert.path, 'rb') as p12_file:
         p12_data = p12_file.read()
@@ -272,47 +271,48 @@ def extract_expiration_p12(cert: CertificateInfo) -> int:
     # An empty password is technically allowed in PKCS12 files
     p12_password = cert.password.encode() if cert.password is not None else None
 
-    # Load the P12 data into a KeyStore object using the provided password
     _, cert, additional_certs = pkcs12.load_key_and_certificates(
         data=p12_data,
         password=p12_password,
         backend=default_backend()
     )
 
-    certs = [cert] + additional_certs
+    pkcs12_certificates = [cert] if cert else []
+    pkcs12_certificates.extend(additional_certs)
 
-    if cert.position and len(certs) < cert.position:
-        raise ValueError(f"Certificate position '{cert.position}' is out of range.")
+    certs = []
+    for x509_certificate in pkcs12_certificates:
+        certs.append(
+            CertificateExpiration(
+                subject=x509_certificate.subject.rfc4514_string(),
+                epoch=int(x509_certificate.not_valid_after.timestamp()),
+                certificate_type='pkcs12',
+            )
+        )
 
-    cert = certs[cert.position or 0]  # if position is not set, use the first certificate in the chain
-
-    epoch_time = int(cert.not_valid_after.timestamp())
-    return epoch_time
+    return certs
 
 
-def extract_expiration_jks(cert: CertificateInfo) -> int:
-    """Extract the expiration date of a certificate from a JKS file and return it as a Linux epoch."""
+def extract_expiration_jks(cert: CertificateInfo) -> List[CertificateExpiration]:
+    """Extracts the expiration date of a JKS certificate from a file and returns a list of CertificateExpiration objects."""
 
-    if cert.alias is None:
-        raise KeyError("Alias not specified.")
-
-    # Load the JKS data into a KeyStore object using the provided password
     keystore = jks.KeyStore.load(filename=cert.path,
                                  store_password=cert.password)
 
-    # Check if the provided alias exists in the KeyStore
-    if not (cert_entry := keystore.entries.get(cert.alias)):
-        raise ValueError(f"Alias '{cert.alias}' not found in the JKS file.")
+    certs = []
+    for keystore_entry in keystore.entries.values():
+        for chain in keystore_entry.cert_chain:
+            x509_certificate = x509.load_der_x509_certificate(data=chain[1],  # chain[0] is the alias, chain[1] is the cert
+                                                              backend=default_backend())
+            certs.append(
+                CertificateExpiration(
+                    subject=x509_certificate.subject.rfc4514_string(),
+                    epoch=int(x509_certificate.not_valid_after.timestamp()),
+                    certificate_type='jks',
+                )
+            )
 
-    last_cert_in_chain = cert_entry.cert_chain[0]  # get the first certificate in the chain
-    logging.debug(f"Found certificate with alias '{cert.alias}' in the JKS file.")
-    # load x509 certificate into cryptography object
-    cert_x509 = x509.load_der_x509_certificate(data=last_cert_in_chain[1],  # get the certificate data
-                                               backend=default_backend())
-
-    # Retrieve the certificate entry and extract the expiration date
-    epoch_time = int(cert_x509.not_valid_after.timestamp())
-    return epoch_time
+    return certs
 
 
 # This dictionary maps the supported certificate types to their corresponding
@@ -325,8 +325,8 @@ CERTIFICATE_TYPES = {
 }
 
 
-def extract_certificate_expiration(cert: CertificateInfo) -> int:
-    """Extract the expiration date of a certificate based on its type."""
+def extract_certificate_expiration(cert: CertificateInfo) -> List[CertificateExpiration]:
+    """Extract the expiration date of a certificate and return it as a Linux epoch."""
 
     cert.type = cert.type
     extract_func = CERTIFICATE_TYPES.get(cert.type)
@@ -491,33 +491,35 @@ def process_certs(certs: List[CertificateInfo],
 
             logging.info(f"Processing certificate '{cert.name}' ({cert.path})")
 
-            expiration_date_epoch = extract_certificate_expiration(cert=cert)
-        except Exception as e:
+            extracted_certs = extract_certificate_expiration(cert=cert)
+        except ValueError as e:
             msg = f"Cannot extract expiration date for certificate '{cert.name}' ({cert.path}). {str(e)}"
-
             if ignore_errors:
                 logging.warning(msg)
                 continue
             raise LookupError(msg)
 
-        # Format expiration date in human-readable format
-        expiration_date = datetime.datetime.fromtimestamp(expiration_date_epoch) .strftime('%Y-%m-%d %H:%M:%S')
-        logging.debug(f"Certificate '{cert.name}' ({cert.path}) expires on "
-                      f"epoch {expiration_date_epoch} ({expiration_date})")
+        for extracted_cert in extracted_certs:
+            expiration_date_epoch = extracted_cert.epoch
+            # Format expiration date in human-readable format
+            expiration_date = datetime.datetime.fromtimestamp(expiration_date_epoch) .strftime('%Y-%m-%d %H:%M:%S')
+            logging.debug(f"Certificate '{cert.name}' ({cert.path}) expires on "
+                          f"epoch {expiration_date_epoch} ({expiration_date})")
 
-        try:
-            if dry_run:
-                logging.info(f"Skipping sending metrics to Pushgateway (dry run enabled)")
-                continue
+            try:
+                if dry_run:
+                    logging.info(f"Skipping sending metrics to Pushgateway (dry run enabled)")
+                    continue
 
-            send_pushgateway(instance=cert.name,
-                             expiration_date_epoch=expiration_date_epoch,
-                             job_name=job_name,
-                             pushgateway_url=pushgateway_url,
-                             labels=cert.labels,
-                             handler=handler)
-        except Exception as e:
-            raise ConnectionError(f"Cannot send metrics to Pushgateway: {str(e)}")
+                cert.labels.update({'subject': extracted_cert.subject})
+                send_pushgateway(instance=cert.name,
+                                 expiration_date_epoch=expiration_date_epoch,
+                                 job_name=job_name,
+                                 pushgateway_url=pushgateway_url,
+                                 labels=cert.labels,
+                                 handler=handler)
+            except Exception as e:
+                raise ConnectionError(f"Cannot send metrics to Pushgateway: {str(e)}")
 
 
 def main():
