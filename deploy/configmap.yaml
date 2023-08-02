@@ -16,6 +16,10 @@ data:
       - name: pem certificate
         path: /certs/pem_cert.pem
         password: env:PEM_PASSWORD
+      - name: jks keystore
+        alias: certalert
+        path: /certs/jks_cert.jks
+        password: env:jks_password
 ---
 apiVersion: v1
 kind: ConfigMap

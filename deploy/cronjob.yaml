@@ -15,19 +15,23 @@ spec:
           #    command: ["/bin/sh", "-c"]
           #    envFrom:
           #      - secretRef:
-          #          name: certinator-certificate-credentials
+          #          name: certalert-certificate-credentials
           #    args: ["keytool -exportcert -keystore /certs/keystore -alias cert_alias -storepass $CERT_PASS -file /certs/my-cert.cer"]
           #    volumeMounts:
           #      - name: transfer
           #        mountPath: /certs
           containers:
-            - name: certinator
-              image: ghcr.io/gi8lino/certinator:latest
+            - name: certalert
+              image: ghcr.io/gi8lino/certalert:latest
               args:
-                - --config=/config/certinator-config.yaml
+                - --config=/config/certalert-config.yaml
               envFrom:
                 - secretRef:
-                    name: certinator-certificate-credentials
+                    name: certalert-certificate-credentials
+                - name: RENAMED_JKS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: certalert-password-file
               volumeMounts:
                 - name: certs
                   mountPath: /certs
@@ -38,10 +42,10 @@ spec:
           volumes:
             - name: certs
               persistentVolumeClaim:
-                claimName: certinator-certs
+                claimName: certalert-certs
             - name: config
               configMap:
-                name: certinator-config
+                name: certalert-config
             - name: transfer
               emptyDir: {}
           restartPolicy: OnFailure
