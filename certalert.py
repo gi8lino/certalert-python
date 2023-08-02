@@ -6,7 +6,7 @@ import os
 import ssl
 import sys
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from urllib.request import HTTPHandler, HTTPSHandler
 
 import jks
@@ -40,6 +40,7 @@ class CertificateInfo:
                                          or the name of the desired certificate within a psk12 file
                                          containing multiple certificates.
                                          Defaults to None.
+        labels (Optional[Dict[str, str]], optional): Additional labels to be added to the metric.
     """
     name: str
     path: str
@@ -47,6 +48,7 @@ class CertificateInfo:
     type: Optional[str] = None
     password: Optional[str] = None
     alias: Optional[str] = None
+    labels: Optional[Dict[str, str]] = None
 
 
 def setup_logger(level: int = logging.INFO):
@@ -56,19 +58,15 @@ def setup_logger(level: int = logging.INFO):
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     urllib3.disable_warnings()
 
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-    default_format = logging.Formatter("%(asctime)s [%(levelname)-7.7s] %(message)s")
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(default_format)
-    root_logger.addHandler(console_handler)
+    logging.basicConfig(level=level,
+                        format="%(asctime)s [%(levelname)-7.7s] %(message)s")
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
 
     parser = argparse.ArgumentParser(
-        description="Certificate expiration exporter",
+        description="certalert - Monitor SSL/TLS certificates and push alerts to Prometheus Pushgateway",
         epilog="",)
     parser.add_argument('--config',
                         '-c',
@@ -140,12 +138,11 @@ def check_config(config: dict) -> None:
     if not (address := pushgateway.get('address')):
         raise KeyError("Key 'pushgateway.address' is missing.")
 
-    # Resolve address from environment variable or file if necessary
     config['pushgateway']['address'] = resolve_variable(address)
 
     if (auth := pushgateway.get('auth')):
         basic, bearer = None, None
-        if basic := auth.get('basic'):
+        if (basic := auth.get('basic')):
             if (username := basic.get('username')) is None:
                 raise KeyError("Key 'pushgateway.auth.basic.username' is missing.")
             config['pushgateway']['auth']['basic']['username'] = resolve_variable(username)
@@ -154,7 +151,7 @@ def check_config(config: dict) -> None:
                 raise KeyError("Key 'pushgateway.auth.basic.password' is missing.")
             config['pushgateway']['auth']['basic']['password'] = resolve_variable(password)
 
-        elif bearer := auth.get('bearer'):
+        elif (bearer := auth.get('bearer')):
             if (token := bearer.get('token')) is None:
                 raise KeyError("Key 'pushgateway.auth.bearer.token' is missing.")
             config['pushgateway']['auth']['bearer']['token'] = resolve_variable(token)
@@ -171,30 +168,37 @@ def check_config(config: dict) -> None:
     if (certs := config.get('certs')) is None:
         raise KeyError("Key 'certs' is missing.")
 
-    for cert in certs:
-        cert_name = cert.get('name')
-        cert_type = cert.get('type')
-        cert_path = cert.get('path')
+    for idx, cert in enumerate(certs):
+        try:
+            cert = CertificateInfo(**cert)
+        except Exception as e:
+            msg = str(e).lstrip("CertificateInfo.__init__() ")  # remove ugly prefix
+            msg = msg[:1].upper() + msg[1:]  # capitalize first letter
+            if not (cert_name := cert.get('name')):
+                raise TypeError(f"Invalid certificate no {idx}. {msg}")
+            raise TypeError(f"Invalid certificate '{cert_name}'. {msg}")
 
         try:
-            if not cert_type:
-                cert_type = guess_certificate_type(cert_path=cert_path)
-                cert['type'] = cert_type
-                logging.debug(f"Guessed type '{cert_type}' for certificate '{cert_name}' based on file extension.")
+            if not cert.type:
+                cert.type = guess_certificate_type(cert_path=cert.path)
+                logging.debug(f"Guessed type '{cert.type}' for certificate '{cert.name}' based on file extension.")
 
-            if cert_type not in CERTIFICATE_TYPES.keys():
-                raise TypeError(f"Type '{cert_type}' is not valid.")
+            if cert.type not in CERTIFICATE_TYPES.keys():
+                raise TypeError(f"Type '{cert.type}' is not valid.")
 
-            if not cert_path:
+            if not cert.path:
                 raise AttributeError("Key 'path' is not specified.")
 
-            if not os.path.isfile(cert_path):
-                raise FileNotFoundError(f"Certificate '{cert_name}' ({cert_path}) not found.")
+            if not os.path.isfile(cert.path):
+                raise FileNotFoundError(f"Certificate '{cert.name}' ({cert.path}) not found.")
 
-            if (password := cert.get('password')):
-                cert['password'] = resolve_variable(password)
+            if (password := cert.password):
+                cert.password = resolve_variable(password)
+
+            certs[idx] = cert # replace the dict with the CertificateInfo object
+
         except Exception as e:
-            raise Exception(f"Invalid certificate '{cert_name}' ({cert_path}). {str(e)}")
+            raise Exception(f"Invalid certificate '{cert.name}' ({cert.path}). {str(e)}")
 
 
 def guess_certificate_type(cert_path: str) -> str:
@@ -249,7 +253,7 @@ def extract_expiration_p12(cert: CertificateInfo) -> int:
 
     # Load the P12 data into a KeyStore object using the provided password
     p12 = pkcs12.load_key_and_certificates(data=p12_data,
-                                           password=cert.password.encode(),
+                                           password=cert.password.encode() if cert.password else None,
                                            backend=default_backend())
 
     # Validate the number of certificates in the P12 file
@@ -315,10 +319,10 @@ CERTIFICATE_TYPES = {
 def extract_certificate_expiration(cert: CertificateInfo) -> int:
     """Extract the expiration date of a certificate based on its type."""
 
-    cert_type = cert.type
-    extract_func = CERTIFICATE_TYPES.get(cert_type)
+    cert.type = cert.type
+    extract_func = CERTIFICATE_TYPES.get(cert.type)
     if extract_func is None:
-        raise TypeError(f"Unknown certificate type '{cert_type}'")
+        raise TypeError(f"Unknown certificate type '{cert.type}'")
 
     return extract_func(cert)
 
@@ -427,11 +431,21 @@ def get_pushgateway_handler(config: dict) -> Callable:
     return handler
 
 
-def send_pushgateway(expiration_date_epoch: int,
+def send_pushgateway(instance: str,
+                     expiration_date_epoch: int,
                      job_name: str,
                      pushgateway_url: str,
+                     labels: Optional[Dict[str, str]] = None,
                      handler: Optional[Callable] = None) -> None:
     """Send certificate expiration metrics to the Prometheus Pushgateway."""
+
+    if labels is None:
+        labels = {}
+
+    # Pushgateway does not allow spaces in labels
+    instance = instance.replace(' ', '_')
+    labels = {k.replace(' ', '_'): v.replace(' ', '_') for k, v in labels.items()}
+    labels.update({'instance': instance})  # merge instance name into additional labels
 
     registry = CollectorRegistry()
 
@@ -442,11 +456,13 @@ def send_pushgateway(expiration_date_epoch: int,
     g.set(expiration_date_epoch)
     g.set_to_current_time()
 
-    logging.debug(f"Sending metrics to pushgateway '{pushgateway_url}' for job '{job_name}'")
+    logging.debug(f"Sending metrics to pushgateway '{pushgateway_url}' "
+                  f"for job '{job_name}' with instance '{instance}'")
 
     push_to_gateway(gateway=pushgateway_url,
                     job=job_name,
                     registry=registry,
+                    grouping_key=labels,
                     handler=handler)
 
 
@@ -460,18 +476,15 @@ def process_certs(certs: List[CertificateInfo],
 
     for cert in certs:
         try:
-            cert_name = cert.get('name')
-            cert_path = cert.get('path')
-
-            if cert.get('enabled', True) is False:
-                logging.info(f"Skip certificate '{cert_name}' because is disabled ({cert_path})")
+            if not cert.enabled:
+                logging.info(f"Skip certificate '{cert.name}' because is disabled ({cert.path})")
                 continue
 
-            logging.info(f"Processing certificate '{cert_name}' ({cert_path})")
+            logging.info(f"Processing certificate '{cert.name}' ({cert.path})")
 
-            expiration_date_epoch = extract_certificate_expiration(cert=CertificateInfo(**cert))
+            expiration_date_epoch = extract_certificate_expiration(cert=cert)
         except Exception as e:
-            msg = f"Cannot extract expiration date for certificate '{cert_name}' ({cert_path}). {str(e)}"
+            msg = f"Cannot extract expiration date for certificate '{cert.name}' ({cert.path}). {str(e)}"
 
             if ignore_errors:
                 logging.warning(msg)
@@ -480,7 +493,7 @@ def process_certs(certs: List[CertificateInfo],
 
         # Format expiration date in human-readable format
         expiration_date = datetime.datetime.fromtimestamp(expiration_date_epoch) .strftime('%Y-%m-%d %H:%M:%S')
-        logging.debug(f"Certificate '{cert_name}' ({cert_path}) expires on "
+        logging.debug(f"Certificate '{cert.name}' ({cert.path}) expires on "
                       f"epoch {expiration_date_epoch} ({expiration_date})")
 
         try:
@@ -488,9 +501,11 @@ def process_certs(certs: List[CertificateInfo],
                 logging.info(f"Skipping sending metrics to Pushgateway (dry run enabled)")
                 continue
 
-            send_pushgateway(expiration_date_epoch=expiration_date_epoch,
+            send_pushgateway(instance=cert.name,
+                             expiration_date_epoch=expiration_date_epoch,
                              job_name=job_name,
                              pushgateway_url=pushgateway_url,
+                             labels=cert.labels,
                              handler=handler)
         except Exception as e:
             raise ConnectionError(f"Cannot send metrics to Pushgateway: {str(e)}")
@@ -504,6 +519,7 @@ def main():
         sys.stderr.write(f"ERROR: Cannot parse start arguments. {str(e)}\n")
         sys.exit(1)
 
+    # Setup logging
     level = logging.DEBUG if args.verbose else os.environ.get('LOG_LEVEL', logging.INFO)
     setup_logger(level)
 
