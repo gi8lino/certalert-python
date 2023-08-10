@@ -1,3 +1,7 @@
+# DEPRECATED WARNING
+
+This was only a POC. Use http://github.com/containeroo/certalert instead.
+
 # certalert - Certificate Expiration Exporter
 
 certalert is a Python script designed to extract certificate expiration dates and send them as metrics to the Prometheus Pushgateway. It is especially useful for monitoring certificate expirations in a Prometheus-based monitoring environment.
